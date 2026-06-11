@@ -103,15 +103,24 @@ def pantau_perintah_api():
                     STATIONS[station_id] = {"process": None, "ticker_thread": None, "is_running": False, "config": {}}
                 state = STATIONS[station_id]
 
-                # UBAH BAGIAN INI (Gabungkan START dan RUNNING)
+                # --- BAGIAN INI YANG SEBELUMNYA HILANG & MEMBUAT INDENTASI ERROR ---
                 if action in ["START", "RUNNING"]:
-                    state["config"] = data.get("config", {})
-                    
-                    # Jika di memori (RAM) belum running, berarti engine baru saja di-restart
                     if not state["is_running"]:
                         print(f"🔄 [RESUME] Memulihkan Stream: {station_id}...")
                         
-                        # Keamanan: Bunuh proses FFmpeg lama yang mungkin nyangkut (zombie) agar tidak bentrok
+                        # ----------------------------------------------------
+                        # ANTI CRASH: Buat file teks KOSONG sebelum FFmpeg dipanggil
+                        # ----------------------------------------------------
+                        overlay_dir = f"/dev/shm/overlays/{station_id}"
+                        os.makedirs(overlay_dir, exist_ok=True)
+                        for f_name in ["baris1.txt", "baris1_sub.txt", "baris2.txt", "baris3.txt"]:
+                            f_path = os.path.join(overlay_dir, f_name)
+                            if not os.path.exists(f_path):
+                                with open(f_path, "w", encoding="utf-8") as f: 
+                                    f.write(" ")
+                        # ----------------------------------------------------
+                        
+                        # Keamanan: Bunuh proses FFmpeg lama yang mungkin nyangkut
                         try:
                             subprocess.run(["pkill", "-f", station_id], check=False)
                             time.sleep(1) # Beri jeda 1 detik agar port RTMP bersih
@@ -132,6 +141,7 @@ def pantau_perintah_api():
                         data["action"] = "RUNNING"
                         with open(path+".tmp", "w") as f: json.dump(data, f)
                         os.replace(path+".tmp", path)
+
                 elif action == "STOP":
                     state["is_running"] = False
                     if state["process"]:
