@@ -4,7 +4,7 @@ echo "🚀 AUTO INSTALLER NORTH49 WORKER NODE (VPS KLIEN) 🚀"
 echo "=================================================="
 
 WORKER_DIR="/home/ubuntu/mux_worker"
-REPO_URL="https://raw.githubusercontent.com/kulimedsos-lab/north49live/main"
+REPO_URL="https://raw.githubusercontent.com/kulimedsos-lab/sys-49-installer/main"
 
 # Generate Kode Pairing Acak (6 Karakter Huruf Besar & Angka)
 PAIRING_KEY=$(cat /dev/urandom | tr -dc 'A-Z0-9' | fold -w 6 | head -n 1)
