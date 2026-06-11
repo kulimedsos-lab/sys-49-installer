@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import shutil
 import time
@@ -16,7 +17,20 @@ from contextlib import asynccontextmanager
 
 from modul_config import PANEL_URL, WORKER_SECRET, WORKER_DIR, DATA_DIR
 from core_setup import get_db_connection, system_log
+from modul_config import PANEL_URL, WORKER_SECRET, WORKER_DIR, DATA_DIR
+try:
+    from modul_config import PAIRING_KEY
+except ImportError:
+    PAIRING_KEY = ""
 
+# Amankan token. Jika belum pairing, tolak semua API selain /api/pairing
+def cek_token(api_key: str = Security(api_key_header)):
+    if not WORKER_SECRET:
+        raise HTTPException(status_code=403, detail="Worker ini belum di-pairing!")
+    if api_key != WORKER_SECRET:
+        raise HTTPException(status_code=403, detail="Akses Ditolak")
+    return api_key
+	
 app = FastAPI(title="Saweria API Gateway V6 (SQLite Edition)")
 
 api_key_header = APIKeyHeader(name="X-Worker-Token", auto_error=True)
@@ -182,3 +196,42 @@ async def worker_download_media(request: Request, api_key: str = Depends(cek_tok
     
 if __name__ == "__main__":
     uvicorn.run("api_gateway:app", host="0.0.0.0", port=8007, reload=False)
+
+@app.post("/api/pairing")
+async def proses_pairing_handshake(request: Request):
+    # Endpoint ini TIDAK PAKAI Depends(cek_token) karena ini pintu masuk awal
+    data = await request.json()
+    input_key = data.get("pairing_key")
+    
+    # 1. Kunci Keamanan: Jika rahasia sudah terisi, endpoint ini mati permanen
+    if WORKER_SECRET != "":
+        return JSONResponse({"status": "error", "message": "Akses Ditolak! Server ini sudah pernah di-pairing."}, status_code=403)
+        
+    # 2. Cek apakah kode dari panel cocok dengan yang ada di layar terminal klien
+    if input_key != PAIRING_KEY:
+        return JSONResponse({"status": "error", "message": "Kode Pairing Salah atau Tidak Valid!"}, status_code=403)
+        
+    # 3. Timpa file konfigurasi dengan rahasia asli dari Panel Pusat
+    config_path = os.path.join(WORKER_DIR, "modul_config.py")
+    try:
+        with open(config_path, "r") as f:
+            konten = f.read()
+            
+        konten = konten.replace('PANEL_URL = ""', f'PANEL_URL = "{data.get("panel_url")}"')
+        konten = konten.replace('WORKER_SECRET = ""', f'WORKER_SECRET = "{data.get("worker_secret")}"')
+        konten = konten.replace(f'PAIRING_KEY = "{PAIRING_KEY}"', 'PAIRING_KEY = ""')
+        
+        with open(config_path, "w") as f:
+            f.write(konten)
+            
+        # 4. Fungsi restart otomatis agar config baru langsung aktif
+        def reboot_engine():
+            time.sleep(2)
+            os._exit(0) # Keluar paksa, PM2 akan otomatis melakukan restart
+            
+        threading.Thread(target=reboot_engine, daemon=True).start()
+        
+        return JSONResponse({"status": "success", "message": "Pairing sukses! Worker siap digunakan."})
+        
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": f"Gagal menulis konfigurasi: {e}"}, status_code=500)
