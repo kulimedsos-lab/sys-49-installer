@@ -10,6 +10,7 @@ import uvicorn
 import threading
 import random
 import string
+import asyncio # <--- Tambahan penting untuk mengatasi HANG
 from fastapi import FastAPI, Request, File, UploadFile, Form, Security, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from fastapi.security.api_key import APIKeyHeader
@@ -76,8 +77,13 @@ def download_gdrive_worker(gdrive_id: str, output_path: str):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🚀 API Gateway Saweria (SQLite) Berjalan...")
+    # Pancing CPU usage pertama agar perhitungan selanjutnya akurat
+    psutil.cpu_percent(interval=None) 
+    
     def jalankan_auto_resume():
         time.sleep(3)
+        if not PANEL_URL or not WORKER_SECRET:
+            return # Cegah error jika belum pairing
         try:
             try: 
                 my_ip = requests.get("https://api.ipify.org", timeout=5).text.strip()
@@ -102,19 +108,16 @@ app.router.lifespan_context = lifespan
 # ==========================================
 @app.post("/api/pairing")
 async def proses_pairing_handshake(request: Request):
-    """Endpoint awal untuk suntik rahasia dari Panel Pusat. Tidak diproteksi Depends(cek_token)"""
+    """Endpoint awal untuk suntik rahasia dari Panel Pusat"""
     data = await request.json()
     input_key = data.get("pairing_key")
     
-    # Kunci Keamanan: Jika rahasia sudah terisi, endpoint ini mati permanen
     if WORKER_SECRET != "":
         return JSONResponse({"status": "error", "message": "Akses Ditolak! Server ini sudah pernah di-pairing."}, status_code=403)
         
-    # Cek apakah kode dari panel cocok dengan yang ada di layar terminal klien
     if input_key != PAIRING_KEY:
         return JSONResponse({"status": "error", "message": "Kode Pairing Salah atau Tidak Valid!"}, status_code=403)
         
-    # Timpa file konfigurasi dengan rahasia asli dari Panel Pusat
     config_path = os.path.join(WORKER_DIR, "modul_config.py")
     try:
         with open(config_path, "r") as f:
@@ -127,7 +130,6 @@ async def proses_pairing_handshake(request: Request):
         with open(config_path, "w") as f:
             f.write(konten)
             
-        # Fungsi restart otomatis agar config baru langsung aktif via PM2
         def reboot_engine():
             time.sleep(2)
             os._exit(0)
@@ -163,7 +165,6 @@ async def inject_donation(request: Request, api_key: str = Depends(cek_token)):
     data = await request.json()
     station_id = data.get("station_id")
     
-    # SIMPAN DONASI LANGSUNG KE SQLITE
     try:
         conn = get_db_connection()
         conn.execute("INSERT INTO donasi (station_id, nama, nominal, timestamp) VALUES (?, ?, ?, ?)",
@@ -187,19 +188,20 @@ async def terima_file_dari_panel(file: UploadFile = File(...), tipe_media: str =
 
 @app.get("/api/stats")
 async def get_vps_stats(api_key: str = Depends(cek_token)):
-    # 1. CPU & RAM (Interval 0.5 detik untuk akurasi)
-    cpu = psutil.cpu_percent(interval=0.5)
+    # PERBAIKAN FATAL: Gunakan interval=None agar tidak BLOCKING CPU 1 Core
+    cpu = psutil.cpu_percent(interval=None)
     ram = psutil.virtual_memory().percent
     
-    # 2. Disk Usage
     disk = psutil.disk_usage(WORKER_DIR)
     disk_total_gb = round(disk.total / (1024**3), 2)
     disk_free_gb = round(disk.free / (1024**3), 2)
     disk_percent = disk.percent
     
-    # 3. Network Speed
     net1 = psutil.net_io_counters()
-    time.sleep(0.5)
+    
+    # PERBAIKAN FATAL: Gunakan asyncio.sleep bukan time.sleep
+    await asyncio.sleep(0.5) 
+    
     net2 = psutil.net_io_counters()
     
     upload_mbs = round(((net2.bytes_sent - net1.bytes_sent) * 2) / (1024 * 1024), 2)
@@ -229,14 +231,12 @@ async def worker_download_media(request: Request, api_key: str = Depends(cek_tok
     custom_name = data.get("custom_name", "media")
     username = data.get("username", "user")
     
-    # Rumus penamaan persis seperti panel pusat
     random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
     safe_name = re.sub(r'[^a-zA-Z0-9]', '_', custom_name)[:30]
     safe_user = re.sub(r'[^a-zA-Z0-9]', '_', username)[:20]
     
     hasil = []
     
-    # Download Video Background
     if video_url:
         vid_id = extract_gdrive_id(video_url)
         nama_file_vid = f"{safe_user}_{safe_name}_{random_suffix}_{vid_id}.mp4"
@@ -245,7 +245,6 @@ async def worker_download_media(request: Request, api_key: str = Depends(cek_tok
         sukses, msg = download_gdrive_worker(vid_id, vid_path)
         hasil.append({"tipe": "video", "status": sukses, "pesan": msg, "file": nama_file_vid})
 
-    # Download Audio
     if audio_url:
         aud_id = extract_gdrive_id(audio_url)
         nama_file_aud = f"{safe_user}_{safe_name}_{random_suffix}_{aud_id}.mp3"
